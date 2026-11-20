@@ -130,11 +130,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   $("today").textContent = `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} (${DAYS[now.getDay()]})`;
 
   let todos = [];          // {id, text, done, due, priority, createdAt}
-  let filter = "open";
+  let filter = "all";
   let store = null;        // db collection or local fallback
   let loaded = false;
 
-  try { const f = localStorage.getItem("todo-filter"); if (f) filter = f; } catch (e) {}
+  try { const f = localStorage.getItem("todo-filter2"); if (f) filter = f; } catch (e) {}
 
   // ---------- 저장소 ----------
   const LKEY = "todo-items";
@@ -171,7 +171,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
   function sorted(list) {
     return [...list].sort((a, b) => {
-      if (a.done !== b.done) return a.done ? 1 : -1;
       const ad = a.due || "9999", bd = b.due || "9999";
       if (ad !== bd) return ad < bd ? -1 : 1;
       if (a.priority !== b.priority) return a.priority === "high" ? -1 : 1;
@@ -277,7 +276,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   });
   document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
     filter = c.dataset.f;
-    try { localStorage.setItem("todo-filter", filter); } catch (e) {}
+    try { localStorage.setItem("todo-filter2", filter); } catch (e) {}
     render();
   }));
   let confirmTimer = null;

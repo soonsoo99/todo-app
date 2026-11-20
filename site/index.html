@@ -123,6 +123,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   <p class="note" id="note"></p>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.js"></script>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -134,11 +135,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   $("today").textContent = `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} (${DAYS[now.getDay()]})`;
 
   let todos = [];          // {id, text, done, due, priority, createdAt}
-  let filter = "open";
+  let filter = "all";
   let store = null;        // db collection or local fallback
   let loaded = false;
 
-  try { const f = localStorage.getItem("todo-filter"); if (f) filter = f; } catch (e) {}
+  try { const f = localStorage.getItem("todo-filter2"); if (f) filter = f; } catch (e) {}
 
   // ---------- 저장소 ----------
   const LKEY = "todo-items";
@@ -147,16 +148,36 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
     write() { try { localStorage.setItem(LKEY, JSON.stringify(todos)); } catch (e) {} },
   };
 
+  // Supabase 연결 값 (공개해도 되는 URL과 anon 키만 넣는다)
+  const SUPABASE_URL = "https://edsdhzagajaxirorcyao.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_9LXLid-3lqiquNjz_9w3WA_MyXhFSWP";
+  const toRow = (d) => {
+    const r = {};
+    if ("text" in d) r.text = d.text;
+    if ("done" in d) r.done = d.done;
+    if ("due" in d) r.due = d.due;
+    if ("priority" in d) r.priority = d.priority;
+    if ("createdAt" in d) r.created_at = d.createdAt;
+    return r;
+  };
+  const fromRow = (r) => ({ id: r.id, text: r.text, done: r.done, due: r.due || "", priority: r.priority, createdAt: r.created_at });
+  async function reload() {
+    const { data, error } = await store.from("shared_todos").select("*");
+    if (error) throw error;
+    todos = data.map(fromRow);
+    loaded = true;
+    render();
+  }
   async function add(item) {
-    if (store) { const ref = store.doc(); await ref.set(item); }
+    if (store) { const { error } = await store.from("shared_todos").insert(toRow(item)); if (error) throw error; await reload(); }
     else { todos.push({ id: "l" + Date.now(), ...item }); local.write(); render(); }
   }
   async function patch(id, data) {
-    if (store) await store.doc(id).update(data);
+    if (store) { const { error } = await store.from("shared_todos").update(toRow(data)).eq("id", id); if (error) throw error; await reload(); }
     else { Object.assign(todos.find((t) => t.id === id), data); local.write(); render(); }
   }
   async function remove(id) {
-    if (store) await store.doc(id).delete();
+    if (store) { const { error } = await store.from("shared_todos").delete().eq("id", id); if (error) throw error; await reload(); }
     else { todos = todos.filter((t) => t.id !== id); local.write(); render(); }
   }
 
@@ -175,7 +196,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
   function sorted(list) {
     return [...list].sort((a, b) => {
-      if (a.done !== b.done) return a.done ? 1 : -1;
       const ad = a.due || "9999", bd = b.due || "9999";
       if (ad !== bd) return ad < bd ? -1 : 1;
       if (a.priority !== b.priority) return a.priority === "high" ? -1 : 1;
@@ -281,7 +301,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   });
   document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
     filter = c.dataset.f;
-    try { localStorage.setItem("todo-filter", filter); } catch (e) {}
+    try { localStorage.setItem("todo-filter2", filter); } catch (e) {}
     render();
   }));
   let confirmTimer = null;
@@ -308,24 +328,25 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
     if (!loaded) $("note").textContent = "저장소에 아직 연결하지 못했어요. 잠시만 기다려 주세요.";
   }, 10000);
 
-  if (!window.claude || !window.claude.use) {
+  if (!window.supabase || SUPABASE_URL.startsWith("PASTE")) {
     clearTimeout(timer);
-    useLocal("이 브라우저에만 저장돼요.");
+    useLocal("아직 Supabase에 연결되지 않아 이 브라우저에만 저장돼요.");
     return;
   }
-  window.claude.use("db").then((db) => {
-    if (!db) { clearTimeout(timer); useLocal("로그인하지 않아 이 브라우저에만 저장돼요."); return; }
-    store = db.collection("todos");
-    store.onSnapshot((snap) => {
-      todos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      loaded = true;
-      if (!snap.metadata.fromCache) { clearTimeout(timer); if ($("note").textContent.startsWith("저장소")) $("note").textContent = ""; }
-      render();
-    }, (err) => {
-      clearTimeout(timer); loaded = true;
-      $("note").textContent = "할 일 목록을 불러오지 못했어요. 페이지를 다시 열어 주세요.";
-      render();
-    });
+  store = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  reload().then(() => {
+    clearTimeout(timer);
+    $("note").textContent = "";
+    // 다른 사람이 바꾸면 바로 다시 불러온다
+    store.channel("todos-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "shared_todos" }, () => reload().catch(() => {}))
+      .subscribe();
+    // 실시간 연결이 끊겨도 30초마다 한 번 확인한다
+    setInterval(() => { if (!document.hidden) reload().catch(() => {}); }, 30000);
+  }).catch(() => {
+    clearTimeout(timer); loaded = true;
+    $("note").textContent = "할 일 목록을 불러오지 못했어요. 페이지를 다시 열어 주세요.";
+    render();
   });
 })();
 </script>
